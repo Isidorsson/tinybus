@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,20 +18,26 @@ import (
 
 // Worker runs `tinybus worker --queue=X [--concurrency=N] [--http-addr=:8080]`.
 //
-// The default handler logs the job and succeeds. Real users embed
-// pkg/tinybus and supply their own handler; the CLI worker is for the
-// docker-compose demo and Railway ergonomics.
+// The default handler logs the job and either succeeds or fails based on
+// `--fail-pct` and the payload (a payload containing `"fail":true` always
+// fails — used by the dashboard's "Enqueue failing" button).
 //
-// HTTP server: if --http-addr or $PORT is set, exposes /healthz and
-// /stats. Railway healthchecks the worker via /healthz.
+// HTTP: if --http-addr or $PORT is set, the worker exposes:
+//   - GET  /          — embedded live dashboard (HTML)
+//   - GET  /healthz   — Railway-style health check
+//   - GET  /stats     — JSON queue counts
+//   - GET  /events    — JSON activity feed for the dashboard
+//   - POST /enqueue   — used by the dashboard buttons
+//   - POST /reset     — clears dead jobs (used by the dashboard)
 func Worker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	queue := fs.String("queue", "default", "queue name")
 	concurrency := fs.Int("concurrency", 1, "in-flight jobs per worker")
-	httpAddr := fs.String("http-addr", "", "if set, expose /healthz and /stats on this address (default: $PORT or none)")
+	httpAddr := fs.String("http-addr", "", "if set, expose dashboard + JSON endpoints (default: $PORT or none)")
 	leaseDuration := fs.Duration("lease", 5*time.Minute, "how long a claim is valid before reclaim")
 	pollInterval := fs.Duration("poll", time.Second, "sleep between empty fetches")
-	failPct := fs.Int("fail-pct", 0, "for demo only: synthetic failure rate 0..100")
+	failPct := fs.Int("fail-pct", 0, "synthetic failure rate 0..100 (demo)")
+	delay := fs.Duration("handler-delay", 400*time.Millisecond, "artificial handler runtime so demo transitions are visible")
 	if err := fs.Parse(args); err != nil {
 		Die("parse flags", err)
 	}
@@ -44,29 +52,36 @@ func Worker(args []string) {
 	defer pool.Close()
 
 	log := Logger()
+	workerID := shortWorkerID()
+
 	q, err := tinybus.New(ctx,
 		tinybus.WithPool(pool),
 		tinybus.WithLogger(log),
 		tinybus.WithConcurrency(*concurrency),
 		tinybus.WithLeaseDuration(*leaseDuration),
 		tinybus.WithPollInterval(*pollInterval),
+		tinybus.WithWorkerID(workerID),
 	)
 	if err != nil {
 		Die("new queue", err)
 	}
 	defer q.Close()
 
+	rec := NewRecorder(200)
+
 	addr := resolveHTTPAddr(*httpAddr)
 	if addr != "" {
-		go runHTTPServer(ctx, addr, q, log)
+		go runHTTPServer(ctx, addr, q, rec, *queue, log)
 	}
 
-	handler := demoHandler(log, *failPct)
+	handler := recordingHandler(rec, workerID, demoHandler(log, *failPct, *delay))
 
 	log.Info("tinybus: starting worker",
 		slog.String("queue", *queue),
 		slog.Int("concurrency", *concurrency),
 		slog.Duration("lease", *leaseDuration),
+		slog.Int("fail_pct", *failPct),
+		slog.String("worker_id", workerID),
 		slog.String("http_addr", addr),
 	)
 
@@ -76,21 +91,60 @@ func Worker(args []string) {
 	log.Info("tinybus: worker stopped")
 }
 
-// demoHandler logs the job and either succeeds or fails based on
-// failPct. Real applications supply their own.
-func demoHandler(log *slog.Logger, failPct int) tinybus.Handler {
+// demoHandler is the default handler used by the CLI worker. Real
+// applications embed pkg/tinybus and supply their own handler.
+func demoHandler(log *slog.Logger, failPct int, delay time.Duration) tinybus.Handler {
 	return func(ctx context.Context, job tinybus.Job) error {
+		// Visible-transition delay. Without this, jobs flash through
+		// states faster than the dashboard polling interval.
+		if delay > 0 {
+			t := time.NewTimer(delay)
+			defer t.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-t.C:
+			}
+		}
 		log.Info("tinybus: handling job",
 			slog.Int64("id", job.ID),
 			slog.String("queue", job.Queue),
 			slog.Int("attempts", job.Attempts),
 			slog.String("payload", string(job.Payload)),
 		)
-		if failPct > 0 && (int(time.Now().UnixNano())%100) < failPct {
+		// Payload-driven failure: the dashboard's "enqueue failing"
+		// button writes `{"fail":true}`. Used to deterministically
+		// demonstrate the retry → dead transition.
+		if isFailingPayload(job.Payload) {
+			return fmt.Errorf("intentional demo failure (attempt %d/%d)", job.Attempts, job.MaxAttempts)
+		}
+		// Synthetic random failure.
+		if failPct > 0 && (int(time.Now().UnixNano()/1000)%100) < failPct {
 			return fmt.Errorf("synthetic failure (fail-pct=%d)", failPct)
 		}
 		return nil
 	}
+}
+
+// isFailingPayload returns true if the payload looks like JSON tagged
+// with "fail":true. Cheap substring match on a known synthetic format.
+func isFailingPayload(payload []byte) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	if bytes.Contains(payload, []byte(`"fail":true`)) {
+		return true
+	}
+	// Tolerate one space after the colon.
+	if bytes.Contains(payload, []byte(`"fail": true`)) {
+		return true
+	}
+	// Defensive: anything else with a "fail" key set to true.
+	var probe struct {
+		Fail bool `json:"fail"`
+	}
+	_ = json.Unmarshal(payload, &probe)
+	return probe.Fail
 }
 
 // resolveHTTPAddr prefers explicit flag, then $PORT (Railway), else "".
@@ -104,20 +158,28 @@ func resolveHTTPAddr(flagVal string) string {
 	return ""
 }
 
-func runHTTPServer(ctx context.Context, addr string, q *tinybus.Queue, log *slog.Logger) {
+// runHTTPServer wires up healthz, stats, and the dashboard routes, and
+// blocks until ctx is cancelled.
+func runHTTPServer(ctx context.Context, addr string, q *tinybus.Queue, rec *Recorder, queue string, log *slog.Logger) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, r *http.Request) {
 		stats, err := q.Stats(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(stats)
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			log.Warn("tinybus: write stats response", slog.String("err", err.Error()))
+		}
 	})
+
+	dash := newDashboard(q, rec, log, queue)
+	dash.routes(mux)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -134,4 +196,17 @@ func runHTTPServer(ctx context.Context, addr string, q *tinybus.Queue, log *slog
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("tinybus: http server", slog.String("err", err.Error()))
 	}
+}
+
+// shortWorkerID returns a stable 4-character worker identifier suitable
+// for the activity feed. Prefers $RAILWAY_REPLICA_ID, falls back to a
+// hash of host+pid so two workers on the same machine differ.
+func shortWorkerID() string {
+	if v := os.Getenv("RAILWAY_REPLICA_ID"); len(v) >= 4 {
+		return v[:4]
+	}
+	host, _ := os.Hostname()
+	h := fnv.New32a()
+	fmt.Fprintf(h, "%s-%d", host, os.Getpid())
+	return fmt.Sprintf("%04x", h.Sum32()&0xffff)
 }

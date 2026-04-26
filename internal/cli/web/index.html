@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>tinybus · live</title>
+<meta name="description" content="Live dashboard for tinybus — a Postgres-backed job queue using SELECT … FOR UPDATE SKIP LOCKED. Click a button. Watch a row move through the table.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23f0883e'/%3E%3Ctext x='8' y='12' font-family='monospace' font-size='12' font-weight='700' text-anchor='middle' fill='%230b1120'%3Et%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=JetBrains+Mono:ital,wght@0,300..800;1,300..800&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --bg-0: #0b1120;
+  --bg-1: #131a2c;
+  --bg-2: #1c2438;
+  --border: #1e293b;
+  --border-soft: #2a3651;
+
+  --text:   #e2e8f0;
+  --text-2: #94a3b8;
+  --text-3: #64748b;
+
+  --accent:    #f0883e;
+  --ready:     #38bdf8;
+  --delayed:   #fbbf24;
+  --completed: #34d399;
+  --dead:      #f43f5e;
+
+  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-mono:    'JetBrains Mono', 'SF Mono', ui-monospace, Consolas, monospace;
+
+  --grid: rgba(226,232,240,0.025);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.55;
+  font-feature-settings: 'tnum' 1, 'ss01' 1, 'ss02' 1;
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+  min-height: 100vh;
+}
+
+::selection { background: var(--accent); color: var(--bg-0); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.shell { max-width: 1140px; margin: 0 auto; padding: 64px 32px 96px; }
+
+/* ─── HEADER ───────────────────────────────────────────────────── */
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 28px;
+  margin-bottom: 44px;
+  animation: fade-up 800ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+.brand {
+  margin: 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 60px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--text);
+  font-variation-settings: 'opsz' 144, 'SOFT' 100;
+}
+
+.brand-suffix {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-weight: 400;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-left: 16px;
+  vertical-align: middle;
+  position: relative;
+  bottom: 12px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  user-select: none;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--completed);
+  box-shadow: 0 0 14px var(--completed);
+  flex-shrink: 0;
+}
+
+.status[data-state="connecting"] .status-dot {
+  background: var(--delayed);
+  box-shadow: 0 0 14px var(--delayed);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.status[data-state="error"] .status-dot {
+  background: var(--dead);
+  box-shadow: 0 0 14px var(--dead);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.tagline {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 22px;
+  line-height: 1.45;
+  color: var(--text-2);
+  max-width: 660px;
+  margin: 0 0 56px;
+  font-variation-settings: 'opsz' 80, 'SOFT' 50;
+  animation: fade-up 800ms 100ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+.tagline em { color: var(--accent); font-style: italic; }
+.tagline code {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 14px;
+  letter-spacing: -0.02em;
+  background: var(--bg-1);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+/* ─── GRID & SECTIONS ──────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 48px;
+  margin-bottom: 64px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0 0 24px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-title .meta {
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── STATS ────────────────────────────────────────────────────── */
+
+.stats { animation: fade-up 800ms 200ms cubic-bezier(.2,.7,.2,1) both; }
+.queue-card + .queue-card { margin-top: 40px; }
+
+.queue-name {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 500;
+  font-style: italic;
+  margin: 0 0 22px;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  font-variation-settings: 'opsz' 80;
+}
+
+.queue-name::before {
+  content: "// ";
+  color: var(--text-3);
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  vertical-align: 2px;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  align-items: center;
+  column-gap: 28px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-row:last-child { border-bottom: 0; }
+
+.stat-num {
+  font-family: var(--font-display);
+  font-size: 60px;
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  color: var(--text);
+  font-feature-settings: 'tnum' 1;
+  font-variation-settings: 'opsz' 144;
+  font-variant-numeric: tabular-nums;
+  transition: color 600ms ease;
+}
+
+.stat-label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.stat-label .label {
+  letter-spacing: 0.04em;
+  font-size: 14px;
+  color: var(--text);
+}
+.stat-label .desc {
+  color: var(--text-3);
+  font-style: italic;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-variation-settings: 'opsz' 30;
+  letter-spacing: 0.02em;
+}
+
+.stat-row[data-state="ready"]     .stat-num { color: var(--ready); }
+.stat-row[data-state="in_flight"] .stat-num { color: var(--accent); }
+.stat-row[data-state="delayed"]   .stat-num { color: var(--delayed); }
+.stat-row[data-state="dead"]      .stat-num { color: var(--dead); }
+
+.stat-row[data-flash="1"] .stat-num { animation: flash 700ms ease; }
+
+.bar-track {
+  height: 4px;
+  background: var(--bg-1);
+  border-radius: 999px;
+  overflow: hidden;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  transition: width 700ms cubic-bezier(.4,0,.2,1);
+}
+
+.bar-fill[data-state="ready"]     { background: var(--ready); }
+.bar-fill[data-state="in_flight"] { background: var(--accent); }
+.bar-fill[data-state="delayed"]   { background: var(--delayed); }
+.bar-fill[data-state="dead"]      { background: var(--dead); }
+
+.live-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.empty {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--text-3);
+  padding: 28px 0;
+  font-variation-settings: 'opsz' 60;
+  margin: 0;
+}
+
+/* ─── ACTIVITY FEED ────────────────────────────────────────────── */
+
+.activity { animation: fade-up 800ms 300ms cubic-bezier(.2,.7,.2,1) both; }
+
+.activity-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 0 0;
+  max-height: 640px;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.activity-feed::-webkit-scrollbar { width: 6px; }
+.activity-feed::-webkit-scrollbar-track { background: transparent; }
+.activity-feed::-webkit-scrollbar-thumb {
+  background: var(--border-soft);
+  border-radius: 999px;
+}
+
+.event {
+  border-left: 2px solid var(--border-soft);
+  padding: 12px 0 12px 18px;
+  margin-bottom: 4px;
+  font-size: 12.5px;
+  animation: slide-in 480ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+.event-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 5px;
+}
+
+.event-time {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.event-id  { color: var(--text); font-weight: 600; letter-spacing: 0.02em; }
+.event-arrow { color: var(--text-3); }
+.event-state { font-weight: 500; letter-spacing: 0.04em; text-transform: lowercase; }
+
+.event-meta {
+  color: var(--text-3);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  word-break: break-word;
+}
+
+.event[data-kind="enqueued"]  { border-left-color: var(--ready); }
+.event[data-kind="enqueued"]  .event-state { color: var(--ready); }
+.event[data-kind="claimed"]   { border-left-color: var(--accent); }
+.event[data-kind="claimed"]   .event-state { color: var(--accent); }
+.event[data-kind="completed"] { border-left-color: var(--completed); }
+.event[data-kind="completed"] .event-state { color: var(--completed); }
+.event[data-kind="failed"]    { border-left-color: var(--delayed); }
+.event[data-kind="failed"]    .event-state { color: var(--delayed); }
+.event[data-kind="dead"]      { border-left-color: var(--dead); }
+.event[data-kind="dead"]      .event-state { color: var(--dead); }
+.event[data-kind="reset"]     { border-left-color: var(--text-3); }
+.event[data-kind="reset"]     .event-state { color: var(--text-3); }
+
+/* ─── CONTROLS ─────────────────────────────────────────────────── */
+
+.controls {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 36px;
+  animation: fade-up 800ms 400ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+.controls-row { display: flex; flex-wrap: wrap; gap: 12px; }
+
+button {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  padding: 14px 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 180ms ease, color 180ms ease, transform 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+button:active:not(:disabled) { transform: translateY(0); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+button[data-variant="danger"]:hover:not(:disabled) {
+  border-color: var(--dead);
+  color: var(--dead);
+}
+
+.btn-prefix {
+  color: var(--text-3);
+  margin-right: 10px;
+  font-weight: 500;
+}
+button:hover:not(:disabled) .btn-prefix { color: inherit; }
+
+/* ─── QUERY SECTION ────────────────────────────────────────────── */
+
+.query { margin-top: 88px; animation: fade-up 800ms 500ms cubic-bezier(.2,.7,.2,1) both; }
+
+.query-block {
+  font-size: 12.5px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 26px 28px;
+  overflow-x: auto;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.query-block code { display: block; white-space: pre; font-family: var(--font-mono); }
+
+.kw  { color: var(--accent); font-weight: 500; }
+.fn  { color: var(--ready); }
+.cmt { color: var(--text-3); font-style: italic; }
+.num { color: var(--delayed); }
+
+.query-caption {
+  margin: 18px 0 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--text-2);
+  font-variation-settings: 'opsz' 60;
+}
+
+.query-caption em { color: var(--accent); }
+
+/* ─── FOOTER ───────────────────────────────────────────────────── */
+
+.footer {
+  margin-top: 80px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+  letter-spacing: 0.06em;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+/* ─── TOAST ────────────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-soft);
+  padding: 12px 18px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 220ms ease, transform 220ms ease;
+  z-index: 100;
+  letter-spacing: 0.04em;
+}
+
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast[data-kind="error"] { border-color: var(--dead); color: var(--dead); }
+
+/* ─── ANIMATIONS ───────────────────────────────────────────────── */
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.7); }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes flash {
+  0%   { transform: scale(1.04); opacity: 0.85; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ─── RESPONSIVE ───────────────────────────────────────────────── */
+
+@media (max-width: 880px) {
+  .shell { padding: 40px 20px 64px; }
+  .grid  { grid-template-columns: 1fr; gap: 64px; }
+  .brand { font-size: 48px; }
+  .brand-suffix { display: block; margin-left: 0; margin-top: 8px; bottom: 0; }
+  .stat-num { font-size: 48px; }
+  .stat-row { grid-template-columns: 90px 1fr auto; column-gap: 18px; }
+  .tagline { font-size: 19px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<main class="shell">
+
+  <header class="masthead">
+    <h1 class="brand">tinybus<span class="brand-suffix">/ live</span></h1>
+    <span class="status" data-state="connecting" id="status" role="status" aria-live="polite">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="status-text">connecting…</span>
+    </span>
+  </header>
+
+  <p class="tagline">
+    a postgres-backed job queue. click a button —
+    <em>watch a row move through the table</em>
+    as <code>SELECT … FOR UPDATE SKIP LOCKED</code> hands it to a worker.
+  </p>
+
+  <div class="grid">
+
+    <section class="stats" aria-labelledby="stats-title">
+      <h2 class="section-title" id="stats-title">
+        <span>queue state</span>
+        <span class="meta" id="updated-at">—</span>
+      </h2>
+      <div id="queues">
+        <p class="empty">no queues yet — enqueue something below.</p>
+      </div>
+    </section>
+
+    <section class="activity" aria-labelledby="activity-title">
+      <h2 class="section-title" id="activity-title">
+        <span>activity</span>
+        <span class="meta" id="event-count">0000 events</span>
+      </h2>
+      <ul class="activity-feed" id="feed">
+        <li class="empty">waiting for events…</li>
+      </ul>
+    </section>
+
+  </div>
+
+  <section class="controls" aria-labelledby="controls-title">
+    <h2 class="section-title" id="controls-title">controls</h2>
+    <div class="controls-row">
+      <button data-action="enqueue-1"    type="button"><span class="btn-prefix">+</span>enqueue 1</button>
+      <button data-action="enqueue-10"   type="button"><span class="btn-prefix">+</span>enqueue 10</button>
+      <button data-action="enqueue-fail" type="button"><span class="btn-prefix">!</span>enqueue failing</button>
+      <button data-action="reset"        type="button" data-variant="danger"><span class="btn-prefix">×</span>clear dead</button>
+    </div>
+  </section>
+
+  <section class="query" aria-labelledby="query-title">
+    <h2 class="section-title" id="query-title">the query</h2>
+<pre class="query-block"><code><span class="cmt">-- what runs every time a worker claims a job</span>
+<span class="kw">WITH</span> next <span class="kw">AS</span> (
+  <span class="kw">SELECT</span> id <span class="kw">FROM</span> jobs
+  <span class="kw">WHERE</span> queue = $1
+    <span class="kw">AND</span> locked_at <span class="kw">IS NULL</span>
+    <span class="kw">AND</span> dead_at  <span class="kw">IS NULL</span>
+    <span class="kw">AND</span> run_at   &lt;= <span class="fn">now</span>()
+  <span class="kw">ORDER BY</span> run_at
+  <span class="kw">FOR UPDATE SKIP LOCKED</span>
+  <span class="kw">LIMIT</span> <span class="num">1</span>
+)
+<span class="kw">UPDATE</span> jobs
+<span class="kw">SET</span>    locked_at = <span class="fn">now</span>(),
+       locked_by = $2,
+       attempts  = attempts + <span class="num">1</span>
+<span class="kw">WHERE</span>  id = (<span class="kw">SELECT</span> id <span class="kw">FROM</span> next)
+<span class="kw">RETURNING</span> id, queue, payload, attempts, max_attempts,
+          created_at, run_at;</code></pre>
+    <p class="query-caption">
+      two workers compete for the same row. one wins. the other <em>skips</em> and takes the next.
+      no broker. no race. one round-trip.
+    </p>
+  </section>
+
+  <footer class="footer">
+    <span>tinybus · single binary · single dependency</span>
+    <span><a href="https://github.com/Isidorsson/tinybus" target="_blank" rel="noopener">→ source on github</a></span>
+  </footer>
+
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  const POLL_MS = 1000;
+  const FEED_MAX = 60;
+
+  const els = {
+    status:      document.getElementById('status'),
+    statusText:  document.getElementById('status-text'),
+    queues:      document.getElementById('queues'),
+    feed:        document.getElementById('feed'),
+    eventCount:  document.getElementById('event-count'),
+    updatedAt:   document.getElementById('updated-at'),
+    toast:       document.getElementById('toast'),
+  };
+
+  const STATE_ORDER = ['ready', 'in_flight', 'delayed', 'dead'];
+  const STATE_LABELS = {
+    ready:     ['ready',     'waiting to be claimed'],
+    in_flight: ['in-flight', 'a worker is running this right now'],
+    delayed:   ['delayed',   'scheduled to run later'],
+    dead:      ['dead',      'failed past max_attempts'],
+  };
+
+  const prevCounts = Object.create(null); // queue → state → number
+
+  let lastEventTs     = 0;
+  let totalEvents     = 0;
+  let consecErrors    = 0;
+  let firstFeedRender = true;
+
+  // ─── Tiny safe DOM builder ──────────────────────────────────
+  // All text values flow through textContent / setAttribute, never innerHTML.
+  function el(tag, opts, ...children) {
+    const e = document.createElement(tag);
+    if (opts) {
+      if (opts.class) e.className = opts.class;
+      if (opts.text != null) e.textContent = String(opts.text);
+      if (opts.data) for (const k in opts.data) e.dataset[k] = String(opts.data[k]);
+      if (opts.attr) for (const k in opts.attr) e.setAttribute(k, String(opts.attr[k]));
+      if (opts.style) {
+        for (const k in opts.style) {
+          // style key whitelist: only known CSS props we set ourselves
+          if (k === 'width' || k === 'background') e.style[k] = String(opts.style[k]);
+        }
+      }
+    }
+    for (const c of children) {
+      if (c == null) continue;
+      e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    }
+    return e;
+  }
+
+  // ─── Network ────────────────────────────────────────────────
+
+  async function getJSON(url) {
+    const r = await fetch(url, { headers: { 'accept': 'application/json' } });
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    return r.json();
+  }
+
+  async function postJSON(url, body) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : null,
+    });
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    if (r.status === 204) return null;
+    return r.json();
+  }
+
+  async function poll() {
+    try {
+      const [stats, events] = await Promise.all([
+        getJSON('/stats'),
+        getJSON('/events?since=' + lastEventTs),
+      ]);
+      renderStats(Array.isArray(stats) ? stats : []);
+      renderEvents(Array.isArray(events) ? events : []);
+      setStatus('connected', 'connected');
+      consecErrors = 0;
+    } catch (err) {
+      consecErrors++;
+      setStatus(consecErrors > 2 ? 'error' : 'connecting',
+                consecErrors > 2 ? 'disconnected' : 'reconnecting…');
+    }
+  }
+
+  function setStatus(state, text) {
+    els.status.dataset.state = state;
+    els.statusText.textContent = text;
+  }
+
+  // ─── Stats render ───────────────────────────────────────────
+
+  function renderStats(stats) {
+    if (!stats.length) {
+      if (!els.queues.querySelector('.empty')) {
+        els.queues.replaceChildren(
+          el('p', { class: 'empty', text: 'no jobs yet — enqueue something below.' })
+        );
+      }
+      els.updatedAt.textContent = formatTime(new Date());
+      return;
+    }
+    els.queues.replaceChildren(...stats.map(buildQueueCard));
+    els.updatedAt.textContent = formatTime(new Date());
+  }
+
+  function buildQueueCard(q) {
+    const total = (q.ready|0) + (q.in_flight|0) + (q.delayed|0) + (q.dead|0);
+    return el('article', { class: 'queue-card' },
+      el('h3', { class: 'queue-name', text: q.queue }),
+      ...STATE_ORDER.map(state => buildStatRow(q, state, total))
+    );
+  }
+
+  function buildStatRow(q, state, total) {
+    const n = q[state] | 0;
+    const labels = STATE_LABELS[state];
+    const pct = total ? Math.round((n / total) * 100) : 0;
+    const flash = checkFlash(q.queue, state, n) ? '1' : '0';
+    const live  = state === 'in_flight' && n > 0;
+
+    const barFill = el('span', {
+      class: 'bar-fill',
+      data: { state },
+      // pct is always a number ∈ [0, 100]
+      attr: { style: 'width:' + pct + '%' },
+    });
+
+    return el('div', { class: 'stat-row', data: { state, flash } },
+      el('span', { class: 'stat-num', text: pad2(n) }),
+      el('span', { class: 'stat-label' },
+        el('span', { class: 'label', text: labels[0] }),
+        el('span', { class: 'desc',  text: labels[1] }),
+        el('span', { class: 'bar-track', attr: { 'aria-hidden': 'true' } }, barFill),
+      ),
+      live ? el('span', { class: 'live-pulse', attr: { 'aria-label': 'live' } })
+           : el('span'),
+    );
+  }
+
+  function checkFlash(queue, state, n) {
+    const map = prevCounts[queue] || (prevCounts[queue] = Object.create(null));
+    const prev = map[state];
+    map[state] = n;
+    return prev !== undefined && prev !== n;
+  }
+
+  // ─── Events render ──────────────────────────────────────────
+
+  function renderEvents(events) {
+    if (!events.length) return;
+
+    if (firstFeedRender) {
+      els.feed.replaceChildren();
+      firstFeedRender = false;
+    }
+
+    // Server returns oldest-first (or any order); we sort to insert deterministically.
+    const sorted = events.slice().sort((a, b) => new Date(a.time) - new Date(b.time));
+
+    for (const ev of sorted) {
+      const ts = new Date(ev.time).getTime();
+      if (ts > lastEventTs) lastEventTs = ts;
+
+      const head = el('div', { class: 'event-head' },
+        el('span', { class: 'event-time',  text: formatTime(new Date(ev.time)) }),
+        el('span', { class: 'event-id',    text: '#' + (ev.job_id || 0) }),
+        el('span', { class: 'event-arrow', text: '→' }),
+        el('span', { class: 'event-state', text: ev.kind || '' }),
+      );
+      const meta = el('div', { class: 'event-meta', text: formatMeta(ev) });
+      const li = el('li', { class: 'event', data: { kind: ev.kind || '' } }, head, meta);
+
+      els.feed.insertBefore(li, els.feed.firstChild);
+      totalEvents++;
+    }
+
+    while (els.feed.children.length > FEED_MAX) {
+      els.feed.removeChild(els.feed.lastChild);
+    }
+
+    els.eventCount.textContent =
+      String(totalEvents).padStart(4, '0') + ' event' + (totalEvents === 1 ? '' : 's');
+  }
+
+  function formatMeta(ev) {
+    const parts = [];
+    if (ev.queue)     parts.push(ev.queue);
+    if (ev.worker_id) parts.push('worker ' + ev.worker_id);
+    if (ev.attempts)  parts.push('attempt ' + ev.attempts);
+    if (ev.detail)    parts.push(ev.detail);
+    return parts.join(' · ');
+  }
+
+  // ─── Controls ───────────────────────────────────────────────
+
+  document.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => action(btn.dataset.action, btn));
+  });
+
+  async function action(name, btn) {
+    btn.disabled = true;
+    try {
+      switch (name) {
+        case 'enqueue-1':    await postJSON('/enqueue', { queue: 'default', count: 1, failing: false }); toast('enqueued 1 job'); break;
+        case 'enqueue-10':   await postJSON('/enqueue', { queue: 'default', count: 10, failing: false }); toast('enqueued 10 jobs'); break;
+        case 'enqueue-fail': await postJSON('/enqueue', { queue: 'default', count: 1, failing: true });  toast('enqueued failing job'); break;
+        case 'reset':        await postJSON('/reset', null);                                              toast('cleared dead jobs'); break;
+      }
+      poll();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setTimeout(() => { btn.disabled = false; }, 250);
+    }
+  }
+
+  // ─── Helpers ────────────────────────────────────────────────
+
+  function formatTime(d) {
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
+    return h + ':' + m + ':' + s;
+  }
+
+  function pad2(n) { return String(n).padStart(2, '0'); }
+
+  let toastTimer;
+  function toast(msg, kind) {
+    clearTimeout(toastTimer);
+    els.toast.textContent = msg;
+    els.toast.dataset.kind = kind || 'info';
+    els.toast.classList.add('visible');
+    toastTimer = setTimeout(() => els.toast.classList.remove('visible'), 2400);
+  }
+
+  // ─── Boot ───────────────────────────────────────────────────
+
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+
+</body>
+</html>
