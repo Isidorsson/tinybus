@@ -1,0 +1,57 @@
+# Demo stack: Postgres + migrate (one-shot) + worker + producer.
+#
+# Usage:
+#   docker compose up --build
+#
+# Tear down (drops the Postgres volume):
+#   docker compose down -v
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tinybus
+      POSTGRES_PASSWORD: tinybus
+      POSTGRES_DB: tinybus
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tinybus -d tinybus"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  migrate:
+    build: .
+    command: ["migrate", "up"]
+    environment:
+      DATABASE_URL: postgres://tinybus:tinybus@postgres:5432/tinybus?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  worker:
+    build: .
+    command: ["worker", "--queue=demo", "--concurrency=2", "--http-addr=:8080", "--fail-pct=10"]
+    environment:
+      DATABASE_URL: postgres://tinybus:tinybus@postgres:5432/tinybus?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+
+  producer:
+    build: .
+    command: ["producer", "--queue=demo", "--interval=2s"]
+    environment:
+      DATABASE_URL: postgres://tinybus:tinybus@postgres:5432/tinybus?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

@@ -1,0 +1,11 @@
+bin/
+.git/
+.github/
+.idea/
+.vscode/
+*.md
+!README.md
+docker-compose.yml
+.env
+.env.*
+images/
