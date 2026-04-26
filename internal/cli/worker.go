@@ -38,6 +38,7 @@ func Worker(args []string) {
 	pollInterval := fs.Duration("poll", time.Second, "sleep between empty fetches")
 	failPct := fs.Int("fail-pct", 0, "synthetic failure rate 0..100 (demo)")
 	delay := fs.Duration("handler-delay", 400*time.Millisecond, "artificial handler runtime so demo transitions are visible")
+	autoMigrate := fs.Bool("auto-migrate", true, "apply pending migrations at startup (idempotent; safe for solo deploys, set false if a separate migrator owns the schema)")
 	if err := fs.Parse(args); err != nil {
 		Die("parse flags", err)
 	}
@@ -52,6 +53,19 @@ func Worker(args []string) {
 	defer pool.Close()
 
 	log := Logger()
+
+	// Apply any pending migrations before workers begin claiming. This
+	// makes single-replica deploys (Railway, fly.io, a bare VPS) work
+	// out of the box without a separate migrator step. Disable with
+	// --auto-migrate=false when a dedicated migrator service owns the
+	// schema in multi-replica setups.
+	if *autoMigrate {
+		if err := tinybus.Migrate(ctx, pool, tinybus.Up); err != nil {
+			Die("auto-migrate", err)
+		}
+		log.Info("tinybus: migrations applied at startup")
+	}
+
 	workerID := shortWorkerID()
 
 	q, err := tinybus.New(ctx,
