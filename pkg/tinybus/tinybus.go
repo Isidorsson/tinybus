@@ -44,11 +44,11 @@ type Handler func(ctx context.Context, job Job) error
 // Stats reports the row counts in each state for a single queue.
 // Returned by Queue.Stats.
 type Stats struct {
-	Queue    string
-	Ready    int64 // locked_at IS NULL AND dead_at IS NULL AND run_at <= now()
-	Delayed  int64 // locked_at IS NULL AND dead_at IS NULL AND run_at >  now()
-	InFlight int64 // locked_at IS NOT NULL AND dead_at IS NULL
-	Dead     int64 // dead_at IS NOT NULL
+	Queue    string `json:"queue"`
+	Ready    int64  `json:"ready"`     // locked_at IS NULL AND dead_at IS NULL AND run_at <= now()
+	Delayed  int64  `json:"delayed"`   // locked_at IS NULL AND dead_at IS NULL AND run_at >  now()
+	InFlight int64  `json:"in_flight"` // locked_at IS NOT NULL AND dead_at IS NULL
+	Dead     int64  `json:"dead"`      // dead_at IS NOT NULL
 }
 
 // Queue is a tinybus client. A single Queue value is safe for concurrent
